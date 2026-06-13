@@ -1,0 +1,84 @@
+from typing import TypedDict, Annotated
+from langgraph.graph import StateGraph, END
+from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import HumanMessage, AIMessage
+import operator
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+# Ensure the ANTHROPIC_API_KEY from the .env is loaded into the environment
+if not os.getenv("ANTHROPIC_API_KEY"):
+    raise RuntimeError("ANTHROPIC_API_KEY not set in environment. Ensure .env contains ANTHROPIC_API_KEY")
+
+
+# 1. Define your state — this persists across every node
+class PaymentState(TypedDict):
+    payment_id: str
+    messages: Annotated[list, operator.add]  # messages accumulate
+    risk_score: float
+    decision: str
+
+# 2. Define nodes — each is a function that transforms state
+llm = ChatAnthropic(model="claude-haiku-4-5")
+
+def assess_risk(state: PaymentState) -> PaymentState:
+    """Node 1: LLM assesses risk of this payment"""
+    response = llm.invoke([
+        HumanMessage(content=f"Rate the fraud risk 0-1 for payment {state['payment_id']}. "
+                              f"Reply with ONLY a number like 0.72")
+    ])
+    
+    # Extract numeric value from response, handling cases where LLM provides text
+    content = response.content.strip()
+    try:
+        score = float(content)
+    except ValueError:
+        # Try to extract a float from the response text
+        import re
+        numbers = re.findall(r'0\.\d+|[0-1](?:\.\d+)?', content)
+        if numbers:
+            score = float(numbers[0])
+        else:
+            # Default to medium risk if LLM doesn't provide a number
+            score = 0.5
+    
+    return {"risk_score": score, "messages": [response]}
+
+def route_decision(state: PaymentState) -> str:
+    """Edge function — decides which node comes next"""
+    if state["risk_score"] > 0.7:
+        return "flag_for_review"
+    return "auto_approve"
+
+def flag_for_review(state: PaymentState) -> PaymentState:
+    return {"decision": "FLAGGED", "messages": [
+        AIMessage(content=f"Payment {state['payment_id']} flagged — risk score {state['risk_score']:.2f}")
+    ]}
+
+def auto_approve(state: PaymentState) -> PaymentState:
+    return {"decision": "APPROVED", "messages": [
+        AIMessage(content=f"Payment {state['payment_id']} auto-approved — risk score {state['risk_score']:.2f}")
+    ]}
+
+# 3. Wire the graph
+graph = StateGraph(PaymentState)
+graph.add_node("assess_risk", assess_risk)
+graph.add_node("flag_for_review", flag_for_review)
+graph.add_node("auto_approve", auto_approve)
+
+graph.set_entry_point("assess_risk")
+graph.add_conditional_edges("assess_risk", route_decision, {
+    "flag_for_review": "flag_for_review",
+    "auto_approve": "auto_approve"
+})
+graph.add_edge("flag_for_review", END)
+graph.add_edge("auto_approve", END)
+
+app = graph.compile()
+
+# 4. Run it
+result = app.invoke({"payment_id": "P001", "messages": []})
+print(f"Decision: {result['decision']}")
+print(f"Risk score: {result['risk_score']}")

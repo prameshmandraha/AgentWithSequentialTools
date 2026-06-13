@@ -35,7 +35,7 @@ agent = create_react_agent(model, tools=[check_payment_status, get_transaction_a
 
 # Run it
 result = agent.invoke({
-    "messages": [("user", "What's the status of payment P002 and how much was it for?")]
+    "messages": [("user", "What's the status of payment P001 and how much was it for?")]
 })
 
-print(result["messages"][-1].content)
+print("Hi Pramesh "+result["messages"][-1].content)
