@@ -1,0 +1,41 @@
+from langchain_anthropic import ChatAnthropic
+from langchain_core.tools import tool
+from langgraph.prebuilt import create_react_agent
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+# Ensure the ANTHROPIC_API_KEY from the .env is loaded into the environment
+if not os.getenv("ANTHROPIC_API_KEY"):
+    raise RuntimeError("ANTHROPIC_API_KEY not set in environment. Ensure .env contains ANTHROPIC_API_KEY")
+
+
+# Define a tool — this is what agents can "do"
+@tool
+def check_payment_status(payment_id: str) -> str:
+    """Check the status of a payment by ID."""
+    # Simulate a database lookup
+    statuses = {
+        "P001": "SETTLED",
+        "P002": "PENDING",
+        "P003": "FAILED - insufficient funds"
+    }
+    return statuses.get(payment_id, "NOT FOUND")
+
+@tool
+def get_transaction_amount(payment_id: str) -> str:
+    """Get the dollar amount for a payment."""
+    amounts = {"P001": "$5,420.00", "P002": "$1,200.00", "P003": "$890.00"}
+    return amounts.get(payment_id, "N/A")
+
+# Create the agent — LangGraph handles the tool-call loop
+model = ChatAnthropic(model="claude-sonnet-4-6")
+agent = create_react_agent(model, tools=[check_payment_status, get_transaction_amount])
+
+# Run it
+result = agent.invoke({
+    "messages": [("user", "What's the status of payment P002 and how much was it for?")]
+})
+
+print(result["messages"][-1].content)
