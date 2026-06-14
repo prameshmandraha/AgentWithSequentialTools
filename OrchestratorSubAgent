@@ -1,0 +1,111 @@
+from langgraph.graph import StateGraph, END
+from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import HumanMessage, SystemMessage
+from typing import TypedDict, Annotated, Literal
+import operator
+from dotenv import load_dotenv
+import os
+from langgraph.checkpoint.memory import MemorySaver
+
+load_dotenv()
+
+# Ensure the ANTHROPIC_API_KEY from the .env is loaded into the environment
+if not os.getenv("ANTHROPIC_API_KEY"):
+    raise RuntimeError("ANTHROPIC_API_KEY not set in environment. Ensure .env contains ANTHROPIC_API_KEY")
+
+llm = ChatAnthropic(model="claude-haiku-4-5")
+
+class AgentState(TypedDict):
+    task: str
+    messages: Annotated[list, operator.add]
+    next_agent: str
+    research_output: str
+    analysis_output: str
+    final_report: str
+
+# Specialist agents
+def researcher(state: AgentState) -> AgentState:
+    response = llm.invoke([
+        SystemMessage(content="You are a research specialist. Find key facts and data."),
+        HumanMessage(content=f"Research this topic: {state['task']}")
+    ])
+    return {"research_output": response.content, "messages": [response]}
+
+def analyst(state: AgentState) -> AgentState:
+    response = llm.invoke([
+        SystemMessage(content="You are an analyst. Identify patterns and risks."),
+        HumanMessage(content=f"Analyze this research:\n{state['research_output']}\n\nOriginal task: {state['task']}")
+    ])
+    return {"analysis_output": response.content, "messages": [response]}
+
+def writer(state: AgentState) -> AgentState:
+    response = llm.invoke([
+        SystemMessage(content="You are a technical writer. Write a clear, concise report."),
+        HumanMessage(content=f"Write a report.\nResearch: {state['research_output']}\nAnalysis: {state['analysis_output']}")
+    ])
+    return {"final_report": response.content, "messages": [response]}
+
+# Supervisor decides what to do next
+def supervisor(state: AgentState) -> AgentState:
+    if not state.get("research_output"):
+        return {"next_agent": "researcher"}
+    if not state.get("analysis_output"):
+        return {"next_agent": "analyst"}
+    if not state.get("final_report"):
+        return {"next_agent": "writer"}
+    return {"next_agent": "END"}
+
+def route_next(state: AgentState) -> str:
+    return state["next_agent"]
+
+# Build the graph
+graph = StateGraph(AgentState)
+graph.add_node("supervisor", supervisor)
+graph.add_node("researcher", researcher)
+graph.add_node("analyst", analyst)
+graph.add_node("writer", writer)
+
+graph.set_entry_point("supervisor")
+graph.add_conditional_edges("supervisor", route_next, {
+    "researcher": "researcher",
+    "analyst": "analyst",
+    "writer": "writer",
+    "END": END
+})
+# All specialists report back to supervisor
+for agent in ["researcher", "analyst", "writer"]:
+    graph.add_edge(agent, "supervisor")
+
+#app = graph.compile()
+
+# Run it — try your payments domain
+""" result = app.invoke({
+    "task": "Analyze risks of adopting real-time payments (RTP) for corporate clients",
+    "messages": [],
+    "next_agent": "",
+    "research_output": "",
+    "analysis_output": "",
+    "final_report": ""
+}) """
+
+#print("Final Report: " + result["final_report"])
+
+# Add persistent memory (swap MemorySaver for SqliteSaver for real persistence)
+memory = MemorySaver()
+app = graph.compile(
+    checkpointer=memory,
+    interrupt_before=["writer"]   # pause here for human review
+)
+config = {"configurable": {"thread_id": "session-001"}}
+
+# Run until the interrupt
+result = app.invoke({"task": "..."}, config=config)
+
+# Human reviews the analysis before the writer runs
+print("Analysis so far:", result["analysis_output"])
+approval = input("Approve? (y/n): ")
+
+if approval == "y":
+    # Resume the same thread — state is preserved
+    final = app.invoke(None, config=config)
+    print("HITL: " + final["final_report"])
