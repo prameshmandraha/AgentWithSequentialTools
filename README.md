@@ -376,10 +376,3 @@ To write a clear, concise technical report, please provide:
 3. **Provide source material** (research data, background information, context)
 4. **Clarify audience level** (executive, technical specialist, general reader)
 
-## Next Action
-
-Please reply with the above information, and I will deliver a professional, well-structured report tailored to your needs.
-
----
-
-**Status:** Awaiting input | **Timeline:** Ready to proceed upon clarification
